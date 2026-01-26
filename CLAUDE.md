@@ -17,14 +17,23 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Development Workflow
 
-**Important:** The user must manually compile and run the Delphi project in RAD Studio.
+### Manual workflow
 
 1. Open `Source/dbuildmcp.dproj` in RAD Studio
 2. Compile and run (F9)
 3. Server starts on `http://localhost:3001/mcp`
 4. Claude can then interact via curl or MCP client
 
+### Agent workflow
+
+1. Build/Compile via `dbuildmcp`
+2. run the process
+3. Server starts on `http://localhost:3001/mcp`
+4. Claude can then interact via curl or MCP client
+
 ## MCP Tools
+
+- `dbuildmcp` to compile/build the project
 
 ### msbuild
 
@@ -41,6 +50,7 @@ Build Delphi projects using MSBuild with the correct RAD Studio environment.
 | `platform` | No | `Win64` | Target platform: `Win32` or `Win64` |
 | `config` | No | `Debug` | Build configuration: `Debug` or `Release` |
 | `verbosity` | No | `quiet` | MSBuild verbosity: `quiet`, `normal`, or `detailed` |
+| `showHintsAndWarnings` | No | `false` | Show hints and warnings in output. Default filters them out. |
 
 **Example curl call:**
 ```bash
@@ -74,6 +84,7 @@ DefaultBuildType=Make
 DefaultPlatform=Win64
 DefaultConfig=Debug
 DefaultVerbosity=quiet
+DefaultShowHintsAndWarnings=0
 BuildTimeoutMs=600000
 ```
 
@@ -85,6 +96,7 @@ BuildTimeoutMs=600000
 | `DefaultPlatform` | Default: Win32 or Win64 |
 | `DefaultConfig` | Default: Debug or Release |
 | `DefaultVerbosity` | Default: quiet, normal, or detailed |
+| `DefaultShowHintsAndWarnings` | Show hints/warnings: 0=false (filter), 1=true (show) |
 | `BuildTimeoutMs` | Build timeout in milliseconds |
 
 ## Build Environment Setup

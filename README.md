@@ -79,6 +79,7 @@ curl -X POST http://localhost:3001/mcp \
 | `platform` | No | `Win64` | `Win32` or `Win64` |
 | `config` | No | `Debug` | `Debug` or `Release` |
 | `verbosity` | No | `quiet` | `quiet`, `normal`, or `detailed` |
+| `showHintsAndWarnings` | No | `false` | Show hints/warnings in output (default: filtered) |
 
 ### Response
 
@@ -123,6 +124,8 @@ DefaultBuildType=Make
 DefaultPlatform=Win64
 DefaultConfig=Debug
 DefaultVerbosity=quiet
+; Show hints and warnings in output (0=filter, 1=show)
+DefaultShowHintsAndWarnings=0
 ; Build timeout in milliseconds (10 minutes)
 BuildTimeoutMs=600000
 ```
@@ -135,6 +138,7 @@ BuildTimeoutMs=600000
 | `DefaultPlatform` | `Win32` or `Win64` |
 | `DefaultConfig` | `Debug` or `Release` |
 | `DefaultVerbosity` | `quiet`, `normal`, or `detailed` |
+| `DefaultShowHintsAndWarnings` | Filter hints/warnings from output |
 | `BuildTimeoutMs` | Maximum build time in ms |
 
 ## Project Structure

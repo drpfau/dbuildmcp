@@ -17,6 +17,7 @@ type
     FPlatform: string;
     FConfig: string;
     FVerbosity: string;
+    FShowHintsAndWarnings: Boolean;
   public
     [SchemaDescription('Full path to the Delphi project file (.dproj). Use forward slashes (/) in path.')]
     property ProjectFile: string read FProjectFile write FProjectFile;
@@ -36,6 +37,10 @@ type
     [Optional]
     [SchemaDescription('MSBuild verbosity: quiet, normal, or detailed. Default: quiet')]
     property Verbosity: string read FVerbosity write FVerbosity;
+
+    [Optional]
+    [SchemaDescription('Show hints and warnings in output. Default: false (only errors shown)')]
+    property ShowHintsAndWarnings: Boolean read FShowHintsAndWarnings write FShowHintsAndWarnings;
   end;
 
   TMSBuildTool = class(TMCPToolBase<TMSBuildParams>)
@@ -47,11 +52,13 @@ type
     FDefaultPlatform: string;
     FDefaultConfig: string;
     FDefaultVerbosity: string;
+    FDefaultShowHintsAndWarnings: Boolean;
     FBuildTimeoutMs: Integer;
 
     procedure LoadSettings;
     function ExecuteProcess(const ACommandLine, AWorkingDir: string;
       out AOutput: string; out AExitCode: DWORD): Boolean;
+    function FilterOutput(const AOutput: string; AShowHintsAndWarnings: Boolean): string;
   protected
     function ExecuteWithParams(const Params: TMSBuildParams): string; override;
   public
@@ -90,6 +97,7 @@ begin
   FDefaultPlatform := 'Win64';
   FDefaultConfig := 'Debug';
   FDefaultVerbosity := 'quiet';
+  FDefaultShowHintsAndWarnings := False;
   FBuildTimeoutMs := 600000;
 
   // Load from settings.ini if exists
@@ -104,6 +112,7 @@ begin
       FDefaultPlatform := IniFile.ReadString('MSBuild', 'DefaultPlatform', FDefaultPlatform);
       FDefaultConfig := IniFile.ReadString('MSBuild', 'DefaultConfig', FDefaultConfig);
       FDefaultVerbosity := IniFile.ReadString('MSBuild', 'DefaultVerbosity', FDefaultVerbosity);
+      FDefaultShowHintsAndWarnings := IniFile.ReadBool('MSBuild', 'DefaultShowHintsAndWarnings', FDefaultShowHintsAndWarnings);
       FBuildTimeoutMs := IniFile.ReadInteger('MSBuild', 'BuildTimeoutMs', FBuildTimeoutMs);
     finally
       IniFile.Free;
@@ -213,12 +222,55 @@ begin
   end;
 end;
 
+function TMSBuildTool.FilterOutput(const AOutput: string; AShowHintsAndWarnings: Boolean): string;
+var
+  Lines: TStringList;
+  FilteredLines: TStringList;
+  Line: string;
+  IsHint, IsWarning: Boolean;
+  I: Integer;
+begin
+  // If showing hints and warnings, return output unchanged
+  if AShowHintsAndWarnings then
+  begin
+    Result := AOutput;
+    Exit;
+  end;
+
+  Lines := TStringList.Create;
+  FilteredLines := TStringList.Create;
+  try
+    Lines.Text := AOutput;
+
+    for I := 0 to Lines.Count - 1 do
+    begin
+      Line := Lines[I];
+
+      // Check for hints: ": Hinweis " or ": hint "
+      IsHint := ContainsText(Line, ': Hinweis ') or ContainsText(Line, ': hint ');
+
+      // Check for warnings: ": warning W" but not hints (hints contain "Hinweis warning")
+      IsWarning := ContainsText(Line, ': warning W') and not IsHint;
+
+      // Keep the line if it's not a hint or warning
+      if not IsHint and not IsWarning then
+        FilteredLines.Add(Line);
+    end;
+
+    Result := FilteredLines.Text;
+  finally
+    Lines.Free;
+    FilteredLines.Free;
+  end;
+end;
+
 function TMSBuildTool.ExecuteWithParams(const Params: TMSBuildParams): string;
 var
   CommandLine: string;
   ProjectDir: string;
   ProjectFile: string;
   BuildType, Platform, Config, Verbosity: string;
+  ShowHintsAndWarnings: Boolean;
   ExitCode: DWORD;
   Output: string;
   Success: Boolean;
@@ -247,6 +299,10 @@ begin
   else
     Verbosity := Params.Verbosity;
 
+  // ShowHintsAndWarnings: use param value, fallback to default from settings
+  // Note: Boolean params default to False when not specified in JSON
+  ShowHintsAndWarnings := Params.ShowHintsAndWarnings or FDefaultShowHintsAndWarnings;
+
   // Validate project file
   if not TFile.Exists(ProjectFile) then
   begin
@@ -272,6 +328,8 @@ begin
   if ExecuteProcess(CommandLine, ProjectDir, Output, ExitCode) then
   begin
     Success := (ExitCode = 0);
+    // Filter hints and warnings from output if not requested
+    Output := FilterOutput(Output, ShowHintsAndWarnings);
     Result := Format(
       'BUILD %s'#13#10 +
       '==============='#13#10 +

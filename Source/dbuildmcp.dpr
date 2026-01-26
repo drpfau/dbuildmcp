@@ -19,8 +19,15 @@ var
   ManagerRegistry: IMCPManagerRegistry;
 
 begin
+  Writeln('nxmcp - Delphi MSBUILD MCP Server');
+  Writeln('==========================');
+  Writeln;
+
+  Writeln('Reading settings.ini');
+  Writeln;
   Settings := TMCPSettings.Create;
   try
+
     ManagerRegistry := TMCPManagerRegistry.Create;
     ManagerRegistry.RegisterManager(TMCPCoreManager.Create(Settings));
     ManagerRegistry.RegisterManager(TMCPToolsManager.Create);
@@ -32,7 +39,7 @@ begin
       Server.ManagerRegistry := ManagerRegistry;
       Server.Start;
 
-      Writeln('MCP Server running on port ', Settings.Port);
+      Writeln('MCP Server running on http://', Settings.Host, ':', Settings.Port, Settings.Endpoint);
       Writeln;
       Writeln('Press ENTER to stop...');
       Readln; // Keep running
