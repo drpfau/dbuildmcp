@@ -80,6 +80,11 @@ curl -X POST http://localhost:3001/mcp \
 | `config` | No | `Debug` | `Debug` or `Release` |
 | `verbosity` | No | `quiet` | `quiet`, `normal`, or `detailed` |
 | `showHintsAndWarnings` | No | `false` | Show hints/warnings in output (default: filtered) |
+| `graphviz` | No | `false` | Emit a `<ProjectName>.gv` GraphViz unit-dependency file (passes `--graphviz` to dcc) |
+| `graphvizExclude` | No | `System.*;Vcl.*;Winapi.*;Data.*;Soap.*;Xml.*` | `;`-separated unit-name wildcards to exclude (only used when `graphviz=true`) |
+| `graphvizOutDir` | No | next to project | Directory to collect the `.gv` file, use `/` not `\` (only used when `graphviz=true`) |
+
+> GraphViz switches are forwarded to the compiler via the project's `DCC_AdditionalSwitches` property. dcc only writes the `.gv` when it actually compiles, so use `buildType=Build` to force generation on an unchanged project.
 
 ### Response
 

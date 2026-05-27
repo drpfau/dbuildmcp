@@ -41,36 +41,63 @@ Build Delphi projects using MSBuild with the correct RAD Studio environment.
 
 **IMPORTANT:** Use forward slashes (`/`) in file paths, not backslashes. The tool converts them internally.
 
-**Parameters:**
+**Parameters:** (JSON keys are lowercase)
 
 | Parameter | Required | Default | Description |
 |-----------|----------|---------|-------------|
-| `projectFile` | Yes | - | Full path to .dproj file. **Use forward slashes!** |
-| `buildType` | No | `Make` | `Build` (full rebuild) or `Make` (incremental) |
+| `projectfile` | Yes | - | Full path to .dproj file. **Use forward slashes!** |
+| `buildtype` | No | `Make` | `Build` (full rebuild) or `Make` (incremental) |
 | `platform` | No | `Win64` | Target platform: `Win32` or `Win64` |
 | `config` | No | `Debug` | Build configuration: `Debug` or `Release` |
 | `verbosity` | No | `quiet` | MSBuild verbosity: `quiet`, `normal`, or `detailed` |
-| `showHintsAndWarnings` | No | `false` | Show hints and warnings in output. Default filters them out. |
+| `showhintsandwarnings` | No | from settings.ini | Show hints and warnings in output. Defaults to the `DefaultShowHintsAndWarnings` ini value when omitted; an explicit `true`/`false` overrides it. |
+| `graphviz` | No | `false` | Generate a GraphViz `.gv` unit-dependency file. Passes `--graphviz` (and `--graphviz-exclude`) to dcc. |
+| `graphvizexclude` | No | `System.*;Vcl.*;Winapi.*;Data.*;Soap.*;Xml.*` | Semicolon-separated unit-name wildcards to exclude from the graph. Only used when `graphviz=true`. |
+| `graphvizoutdir` | No | next to project | Directory to collect the generated `.gv` file. **Use forward slashes!** Only used when `graphviz=true`. |
+
+### GraphViz unit-dependency graphs
+
+When `graphviz=true`, the build forwards the dcc switches `--graphviz` and `--graphviz-exclude=<patterns>` to the Delphi compiler through the project's `DCC_AdditionalSwitches` MSBuild property (these are raw compiler switches, not native MSBuild flags). The compiler emits a `<ProjectName>.gv` GraphViz DOT file describing the unit `uses` graph (implementation-section uses are drawn `style=dashed`). Process the `.gv` with [GraphViz](https://graphviz.org/) to render a diagram.
+
+- Semicolons in the exclude list are escaped to `%3B` internally so MSBuild does not mistake them for `/p:` property separators.
+- `System`, `SysInit`, and `System.Variants` are always excluded by the compiler regardless of the exclude list.
+- dcc only emits the `.gv` when it actually compiles. An incremental `Make` build that recompiles nothing produces no file — use `buildtype=Build` to force it.
+- The result header gains a `GraphViz:` line reporting the final `.gv` path (or a note if none was generated).
 
 **Example curl call:**
 ```bash
 curl -X POST http://localhost:3001/mcp \
   -H "Content-Type: application/json" \
-  -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"msbuild","arguments":{"projectFile":"C:/projects/MyApp/MyApp.dproj","platform":"Win64","config":"Release"}}}'
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"msbuild","arguments":{"projectfile":"C:/projects/MyApp/MyApp.dproj","platform":"Win64","config":"Release"}}}'
 ```
 
 **Response Format:**
+
+On a successful `quiet` build (the default), the response omits the raw MSBuild output entirely — only the header block is returned:
 ```
-BUILD SUCCEEDED (or FAILED)
+BUILD SUCCEEDED
 ===============
 Project: C:\projects\MyApp\MyApp.dproj
 BuildType: Make
 Platform: Win64
 Config: Release
 ExitCode: 0
-===============
-[MSBuild output here]
 ```
+
+On failure, or when `verbosity` is `normal`/`detailed`, or when `showhintsandwarnings=true`, the header is followed by a separator and the filtered MSBuild output:
+```
+BUILD FAILED
+===============
+Project: C:\projects\MyApp\MyApp.dproj
+BuildType: Make
+Platform: Win64
+Config: Release
+ExitCode: 1
+===============
+[filtered MSBuild output here]
+```
+
+The MSBuild banner is suppressed via `-nologo`, and the trailing ` [<project path>]` suffix that MSBuild appends to each diagnostic line is stripped automatically.
 
 ## Configuration (settings.ini)
 
