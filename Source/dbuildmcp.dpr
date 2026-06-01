@@ -11,6 +11,7 @@ uses
   MCPServer.CoreManager,
   MCPServer.ToolsManager,
   MCPServer.ResourcesManager,
+  dbuildmcp.ConsoleLog in 'dbuildmcp.ConsoleLog.pas',
   dbuildmcp.Tool.MSBuild in 'dbuildmcp.Tool.MSBuild.pas';
 
 var
@@ -33,6 +34,10 @@ begin
     ManagerRegistry.RegisterManager(TMCPToolsManager.Create);
     ManagerRegistry.RegisterManager(TMCPResourcesManager.Create);
 
+    // Print a concise, color-coded line per incoming request so the console
+    // can be glanced at to confirm the server is being used.
+    InstallConsoleActivityLog;
+
     Server := TMCPIdHTTPServer.Create(nil);
     try
       Server.Settings := Settings;
@@ -41,7 +46,9 @@ begin
 
       Writeln('MCP Server running on http://', Settings.Host, ':', Settings.Port, Settings.Endpoint);
       Writeln;
+      Writeln('Activity (time  method [-> tool]):');
       Writeln('Press ENTER to stop...');
+      Writeln;
       Readln; // Keep running
 
       Server.Stop;

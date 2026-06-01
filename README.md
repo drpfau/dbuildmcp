@@ -16,7 +16,7 @@ dbuildmcp enables AI assistants to compile Delphi projects by providing an MCP-c
 - Debug and Release configurations
 - Build (full rebuild) or Make (incremental) build types
 - Configurable MSBuild verbosity (quiet, normal, detailed)
-- Full build output capture
+- Concise, token-efficient output: a one-line result header, errors-only on failure with a configurable error cap, plus hint/warning and total-line ceilings
 - Configurable build timeout (default 10 minutes)
 
 ## Requirements
@@ -83,25 +83,35 @@ curl -X POST http://localhost:3001/mcp \
 | `graphviz` | No | `false` | Emit a `<ProjectName>.gv` GraphViz unit-dependency file (passes `--graphviz` to dcc) |
 | `graphvizExclude` | No | `System.*;Vcl.*;Winapi.*;Data.*;Soap.*;Xml.*` | `;`-separated unit-name wildcards to exclude (only used when `graphviz=true`) |
 | `graphvizOutDir` | No | next to project | Directory to collect the `.gv` file, use `/` not `\` (only used when `graphviz=true`) |
+| `maxErrors` | No | `10` (from settings.ini) | Max error lines shown on a failed build. `1` = first error only, `0` = all |
 
 > GraphViz switches are forwarded to the compiler via the project's `DCC_AdditionalSwitches` property. dcc only writes the `.gv` when it actually compiles, so use `buildType=Build` to force generation on an unchanged project.
 
 ### Response
 
-The tool returns a structured text response:
+On a successful `quiet` build (the default), the response is a single status line — no MSBuild output:
 
 ```
-BUILD SUCCEEDED
-===============
-Project: C:\projects\MyApp\MyApp.dproj
-BuildType: Build
-Platform: Win64
-Config: Release
-ExitCode: 0
-===============
-Microsoft (R) Build Engine version 4.8.9221.0
-[Full MSBuild output...]
+BUILD SUCCEEDED | MyApp.dproj | Win64/Release/Build (exit 0)
 ```
+
+On failure — or when `verbosity` is `normal`/`detailed`, or `showHintsAndWarnings=true` — the filtered MSBuild output follows on the next lines:
+
+```
+BUILD FAILED | MyApp.dproj | Win64/Release/Build (exit 1)
+MyApp.dpr(42): error E2003: Undeclared identifier: 'Foo'
+... (+4 more error(s); set maxErrors=0 to show all) ...
+```
+
+The header is one line (status, project file name, `Platform/Config/BuildType`, exit code) with an ASCII `|` separator. The ` [<project path>]` suffix MSBuild appends to each diagnostic is stripped automatically.
+
+To keep results small (they count against the model's context), the output is bounded after filtering:
+
+- **`maxErrors`** / **`DefaultMaxErrors`** (default `10`) — caps error lines on failure; MSBuild's `N Error(s)` summary is always kept. `1` = first/root error only, `0` = all.
+- **`DefaultMaxHintsWarnings`** (default `30`) — caps hints/warnings when they are shown.
+- **`MaxOutputLines`** (default `200`) — hard ceiling on total output lines; head and tail are kept so the summary survives, with a `... (K lines truncated) ...` marker.
+
+Every limit treats `0` as unlimited.
 
 ## Configuration
 
@@ -133,6 +143,10 @@ DefaultVerbosity=quiet
 DefaultShowHintsAndWarnings=0
 ; Build timeout in milliseconds (10 minutes)
 BuildTimeoutMs=600000
+; Output-size limits (0 = unlimited)
+DefaultMaxErrors=10
+DefaultMaxHintsWarnings=30
+MaxOutputLines=200
 ```
 
 | Setting | Description |
@@ -145,6 +159,9 @@ BuildTimeoutMs=600000
 | `DefaultVerbosity` | `quiet`, `normal`, or `detailed` |
 | `DefaultShowHintsAndWarnings` | Filter hints/warnings from output |
 | `BuildTimeoutMs` | Maximum build time in ms |
+| `DefaultMaxErrors` | Max error lines on a failed build (0=all); per-call `maxErrors` overrides |
+| `DefaultMaxHintsWarnings` | Max hint/warning lines when shown (0=all) |
+| `MaxOutputLines` | Hard ceiling on total output lines after filtering (0=unlimited) |
 
 ## Project Structure
 
@@ -154,6 +171,7 @@ dbuildmcp/
 │   ├── dbuildmcp.dpr           # Main program
 │   ├── dbuildmcp.dproj         # Project file
 │   ├── dbuildmcp.Tool.MSBuild.pas  # MSBuild tool
+│   ├── dbuildmcp.ConsoleLog.pas    # Concise console activity log
 │   └── settings.ini            # Server configuration
 ├── sample code/                # Reference implementations
 ├── CLAUDE.md                   # AI assistant instructions

@@ -54,6 +54,17 @@ Build Delphi projects using MSBuild with the correct RAD Studio environment.
 | `graphviz` | No | `false` | Generate a GraphViz `.gv` unit-dependency file. Passes `--graphviz` (and `--graphviz-exclude`) to dcc. |
 | `graphvizexclude` | No | `System.*;Vcl.*;Winapi.*;Data.*;Soap.*;Xml.*` | Semicolon-separated unit-name wildcards to exclude from the graph. Only used when `graphviz=true`. |
 | `graphvizoutdir` | No | next to project | Directory to collect the generated `.gv` file. **Use forward slashes!** Only used when `graphviz=true`. |
+| `maxerrors` | No | from settings.ini (`10`) | Max number of error lines shown on a failed build. `1` = just the first error, `0` = all. Overrides `DefaultMaxErrors`. |
+
+### Output size / token limits
+
+To keep tool results small (they are sent back to the model and count against context), the output is bounded after filtering:
+
+- **`maxerrors`** (per-call) / **`DefaultMaxErrors`** (ini, default `10`) — on a failed build, only the first N error lines are shown; the rest are collapsed into a `(+K more error(s) …)` note. MSBuild's own `N Error(s)` summary is always kept, so the true total is still visible. Set `maxerrors=1` for just the first (root-cause) error, or `0` for all.
+- **`DefaultMaxHintsWarnings`** (ini, default `30`) — when hints/warnings are shown (`showhintsandwarnings=true`), they are capped at this many, with a `(+K more … suppressed)` note.
+- **`MaxOutputLines`** (ini, default `200`) — a hard ceiling on total output lines after all filtering; the head and tail are kept (so the trailing summary survives) with a `… (K lines truncated) …` marker in the middle.
+
+Every limit treats `0` as unlimited. Error detection only ever *caps* detected error lines — an undetected error is treated as ordinary text and kept, so no error is hidden by the cap.
 
 ### GraphViz unit-dependency graphs
 
@@ -73,31 +84,20 @@ curl -X POST http://localhost:3001/mcp \
 
 **Response Format:**
 
-On a successful `quiet` build (the default), the response omits the raw MSBuild output entirely — only the header block is returned:
+The header is a single line — `BUILD <status> | <ProjectFileName> | <Platform>/<Config>/<BuildType> (exit <code>)` — to keep the (frequently repeated) result small. Only the project file *name* is shown, not the full path, since the caller already supplied it. The separator is an ASCII `|` on purpose (the response path does not emit UTF-8 for non-ASCII characters).
+
+On a successful `quiet` build (the default), the response is just that one line:
 ```
-BUILD SUCCEEDED
-===============
-Project: C:\projects\MyApp\MyApp.dproj
-BuildType: Make
-Platform: Win64
-Config: Release
-ExitCode: 0
+BUILD SUCCEEDED | MyApp.dproj | Win64/Release/Make (exit 0)
 ```
 
-On failure, or when `verbosity` is `normal`/`detailed`, or when `showhintsandwarnings=true`, the header is followed by a separator and the filtered MSBuild output:
+On failure, or when `verbosity` is `normal`/`detailed`, or when `showhintsandwarnings=true`, the filtered MSBuild output follows on the next lines:
 ```
-BUILD FAILED
-===============
-Project: C:\projects\MyApp\MyApp.dproj
-BuildType: Make
-Platform: Win64
-Config: Release
-ExitCode: 1
-===============
+BUILD FAILED | MyApp.dproj | Win64/Release/Make (exit 1)
 [filtered MSBuild output here]
 ```
 
-The MSBuild banner is suppressed via `-nologo`, and the trailing ` [<project path>]` suffix that MSBuild appends to each diagnostic line is stripped automatically.
+The MSBuild banner is suppressed via `-nologo`, and the trailing ` [<project path>]` suffix that MSBuild appends to each diagnostic line is stripped automatically. Output is further bounded by the limits described under **Output size / token limits** above.
 
 ## Configuration (settings.ini)
 
@@ -113,6 +113,9 @@ DefaultConfig=Debug
 DefaultVerbosity=quiet
 DefaultShowHintsAndWarnings=0
 BuildTimeoutMs=600000
+DefaultMaxErrors=10
+DefaultMaxHintsWarnings=30
+MaxOutputLines=200
 ```
 
 | Setting | Description |
@@ -125,6 +128,9 @@ BuildTimeoutMs=600000
 | `DefaultVerbosity` | Default: quiet, normal, or detailed |
 | `DefaultShowHintsAndWarnings` | Show hints/warnings: 0=false (filter), 1=true (show) |
 | `BuildTimeoutMs` | Build timeout in milliseconds |
+| `DefaultMaxErrors` | Max error lines on a failed build (0=all). Overridable per-call via `maxerrors`. |
+| `DefaultMaxHintsWarnings` | Max hint/warning lines when shown (0=all) |
+| `MaxOutputLines` | Hard ceiling on total output lines after filtering (0=unlimited) |
 
 ## Build Environment Setup
 

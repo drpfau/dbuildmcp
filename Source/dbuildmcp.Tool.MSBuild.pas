@@ -1,4 +1,4 @@
-unit dbuildmcp.Tool.MSBuild;
+﻿unit dbuildmcp.Tool.MSBuild;
 
 interface
 
@@ -22,49 +22,56 @@ type
     FGraphviz: Boolean;
     FGraphvizExclude: string;
     FGraphvizOutDir: string;
+    FMaxErrors: Integer;
+    FMaxErrorsProvided: Boolean;
     procedure SetShowHintsAndWarnings(const Value: Boolean);
+    procedure SetMaxErrors(const Value: Integer);
   public
-    [SchemaDescription('Full path to the Delphi project file (.dproj). Use forward slashes (/) in path.')]
+    [SchemaDescription('Path to the .dproj (forward slashes).')]
     property ProjectFile: string read FProjectFile write FProjectFile;
 
     [Optional]
-    [SchemaDescription('Build type: Build (full rebuild) or Make (incremental). Default: Make')]
+    [SchemaDescription('Build (rebuild) or Make (incremental). Default Make.')]
     property BuildType: string read FBuildType write FBuildType;
 
     [Optional]
-    [SchemaDescription('Target platform: Win32 or Win64. Default: Win64')]
+    [SchemaDescription('Win32 or Win64. Default Win64.')]
     property Platform: string read FPlatform write FPlatform;
 
     [Optional]
-    [SchemaDescription('Build configuration: Debug or Release. Default: Debug')]
+    [SchemaDescription('Debug or Release. Default Debug.')]
     property Config: string read FConfig write FConfig;
 
     [Optional]
-    [SchemaDescription('MSBuild verbosity: quiet, normal, or detailed. Default: quiet')]
+    [SchemaDescription('quiet, normal, or detailed. Default quiet.')]
     property Verbosity: string read FVerbosity write FVerbosity;
 
     [Optional]
-    [SchemaDescription('Show hints and warnings in output. Default: false (only errors shown)')]
+    [SchemaDescription('Show hints/warnings (else errors only). Default false.')]
     property ShowHintsAndWarnings: Boolean read FShowHintsAndWarnings write SetShowHintsAndWarnings;
 
     // Read-only: excluded from JSON schema and deserialization; tracks whether the caller explicitly provided ShowHintsAndWarnings.
     property ShowHintsAndWarningsProvided: Boolean read FShowHintsAndWarningsProvided;
 
     [Optional]
-    [SchemaDescription('Generate a GraphViz .gv unit-dependency file for each compiled project ' +
-      '(passes --graphviz to the Delphi compiler). Default: false')]
+    [SchemaDescription('Emit a GraphViz .gv unit-dependency file (dcc --graphviz). Default false.')]
     property Graphviz: Boolean read FGraphviz write FGraphviz;
 
     [Optional]
-    [SchemaDescription('Semicolon-separated unit-name wildcards to exclude from the graph ' +
-      '(passes --graphviz-exclude). Only used when graphviz is true. ' +
+    [SchemaDescription('Unit wildcards to exclude, ;-separated (graphviz only). ' +
       'Default: System.*;Vcl.*;Winapi.*;Data.*;Soap.*;Xml.*')]
     property GraphvizExclude: string read FGraphvizExclude write FGraphvizExclude;
 
     [Optional]
-    [SchemaDescription('Directory to collect the generated .gv file(s). Use forward slashes (/). ' +
-      'Only used when graphviz is true. Default: next to the project.')]
+    [SchemaDescription('Dir to collect the .gv, forward slashes (graphviz only). Default: next to project.')]
     property GraphvizOutDir: string read FGraphvizOutDir write FGraphvizOutDir;
+
+    [Optional]
+    [SchemaDescription('Max error lines on failure; 1=first only, 0=all. Default 10.')]
+    property MaxErrors: Integer read FMaxErrors write SetMaxErrors;
+
+    // Read-only: excluded from JSON schema; tracks whether MaxErrors was explicitly provided.
+    property MaxErrorsProvided: Boolean read FMaxErrorsProvided;
   end;
 
   TMSBuildTool = class(TMCPToolBase<TMSBuildParams>)
@@ -78,15 +85,24 @@ type
     FDefaultVerbosity: string;
     FDefaultShowHintsAndWarnings: Boolean;
     FBuildTimeoutMs: Integer;
+    FDefaultMaxErrors: Integer;
+    FDefaultMaxHintsWarnings: Integer;
+    FMaxOutputLines: Integer;
 
     procedure LoadSettings;
+    function IsErrorLine(const ALine: string): Boolean;
+    function CapTotalLines(const AText: string; AMaxLines: Integer): string;
     function ExecuteProcess(const ACommandLine, AWorkingDir: string;
       out AOutput: string; out AExitCode: DWORD): Boolean;
     function FilterOutput(const AOutput, AProjectFile: string;
-      AShowHintsAndWarnings, ASuccess, AIsQuiet: Boolean): string;
+      AShowHintsAndWarnings, ASuccess, AIsQuiet: Boolean;
+      AMaxErrors, AMaxHintsWarnings, AMaxOutputLines: Integer): string;
     function BuildGraphvizArg(const Params: TMSBuildParams): string;
-    function FindGraphvizFile(const AProjectDir, AGvName, APlatform, AConfig: string;
-      ABuildStart: TDateTime): string;
+    function WrapWithRsvars(const APlatform, AMSBuildArgs: string): string;
+    function ResolveExeOutputDir(const AProjectFile, AProjectDir, APlatform,
+      AConfig: string): string;
+    function FindGraphvizFile(const AProjectDir, AExeOutDir, AGvName, APlatform,
+      AConfig: string; ABuildStart: TDateTime): string;
     function CollectGraphviz(const Params: TMSBuildParams;
       const AProjectDir, AProjectFile, APlatform, AConfig: string;
       ABuildStart: TDateTime; ASuccess: Boolean): string;
@@ -116,6 +132,12 @@ begin
   FShowHintsAndWarningsProvided := True;
 end;
 
+procedure TMSBuildParams.SetMaxErrors(const Value: Integer);
+begin
+  FMaxErrors := Value;
+  FMaxErrorsProvided := True;
+end;
+
 { TMSBuildTool }
 
 constructor TMSBuildTool.Create;
@@ -123,8 +145,7 @@ begin
   inherited;
   FName := 'msbuild';
   FTitle := 'Delphi MSBuild';
-  FDescription := 'Build Delphi projects using MSBuild with RAD Studio environment. ' +
-    'IMPORTANT: Use forward slashes (/) in file paths, not backslashes.';
+  FDescription := 'Build a Delphi .dproj with MSBuild (RAD Studio). Use forward slashes in paths.';
   LoadSettings;
 end;
 
@@ -142,6 +163,9 @@ begin
   FDefaultVerbosity := 'quiet';
   FDefaultShowHintsAndWarnings := False;
   FBuildTimeoutMs := 600000;
+  FDefaultMaxErrors := 10;
+  FDefaultMaxHintsWarnings := 30;
+  FMaxOutputLines := 200;
 
   // Load from settings.ini if exists
   SettingsPath := TPath.Combine(ExtractFilePath(ParamStr(0)), 'settings.ini');
@@ -157,6 +181,9 @@ begin
       FDefaultVerbosity := IniFile.ReadString('MSBuild', 'DefaultVerbosity', FDefaultVerbosity);
       FDefaultShowHintsAndWarnings := IniFile.ReadBool('MSBuild', 'DefaultShowHintsAndWarnings', FDefaultShowHintsAndWarnings);
       FBuildTimeoutMs := IniFile.ReadInteger('MSBuild', 'BuildTimeoutMs', FBuildTimeoutMs);
+      FDefaultMaxErrors := IniFile.ReadInteger('MSBuild', 'DefaultMaxErrors', FDefaultMaxErrors);
+      FDefaultMaxHintsWarnings := IniFile.ReadInteger('MSBuild', 'DefaultMaxHintsWarnings', FDefaultMaxHintsWarnings);
+      FMaxOutputLines := IniFile.ReadInteger('MSBuild', 'MaxOutputLines', FMaxOutputLines);
     finally
       IniFile.Free;
     end;
@@ -265,14 +292,69 @@ begin
   end;
 end;
 
+function TMSBuildTool.IsErrorLine(const ALine: string): Boolean;
+begin
+  // MSBuild surfaces dcc diagnostics in its canonical "file(line,col): error CODE:"
+  // form (category in English even on a German MSBuild — cf. ": warning W" below).
+  // German fallbacks are belt-and-suspenders; missing a match only means the line
+  // is treated as ordinary text and therefore kept, never hidden.
+  Result := ContainsText(ALine, ': error ')
+         or ContainsText(ALine, ': fatal error ')
+         or ContainsText(ALine, ': Fehler ')
+         or ContainsText(ALine, ': schwerwiegender Fehler ');
+end;
+
+function TMSBuildTool.CapTotalLines(const AText: string; AMaxLines: Integer): string;
+var
+  Lines: TStringList;
+  Sb: TStringBuilder;
+  HeadKeep, TailKeep, Dropped, I: Integer;
+begin
+  if AMaxLines <= 0 then
+    Exit(AText);
+
+  Lines := TStringList.Create;
+  try
+    Lines.Text := AText;
+    if Lines.Count <= AMaxLines then
+      Exit(AText);
+
+    // Keep a head and a tail so the trailing "N Error(s)" summary survives.
+    TailKeep := AMaxLines div 4;
+    if TailKeep > 15 then
+      TailKeep := 15;
+    if TailKeep < 1 then
+      TailKeep := 1;
+    HeadKeep := AMaxLines - TailKeep;
+    Dropped := Lines.Count - HeadKeep - TailKeep;
+
+    Sb := TStringBuilder.Create;
+    try
+      for I := 0 to HeadKeep - 1 do
+        Sb.AppendLine(Lines[I]);
+      Sb.AppendLine(Format('... (%d lines truncated) ...', [Dropped]));
+      for I := Lines.Count - TailKeep to Lines.Count - 1 do
+        Sb.AppendLine(Lines[I]);
+      Result := TrimRight(Sb.ToString);
+    finally
+      Sb.Free;
+    end;
+  finally
+    Lines.Free;
+  end;
+end;
+
 function TMSBuildTool.FilterOutput(const AOutput, AProjectFile: string;
-  AShowHintsAndWarnings, ASuccess, AIsQuiet: Boolean): string;
+  AShowHintsAndWarnings, ASuccess, AIsQuiet: Boolean;
+  AMaxErrors, AMaxHintsWarnings, AMaxOutputLines: Integer): string;
 var
   Lines: TStringList;
   FilteredLines: TStringList;
   Line: string;
   ProjectSuffix: string;
   IsHint, IsWarning: Boolean;
+  ErrorsShown, ErrorsDropped: Integer;
+  HWShown, HWDropped: Integer;
   I: Integer;
 begin
   // On successful quiet builds there's nothing useful in the output; drop it.
@@ -280,6 +362,10 @@ begin
     Exit('');
 
   ProjectSuffix := ' [' + AProjectFile + ']';
+  ErrorsShown := 0;
+  ErrorsDropped := 0;
+  HWShown := 0;
+  HWDropped := 0;
 
   Lines := TStringList.Create;
   FilteredLines := TStringList.Create;
@@ -295,22 +381,146 @@ begin
       if EndsText(ProjectSuffix, Line) then
         Line := Copy(Line, 1, Length(Line) - Length(ProjectSuffix));
 
-      if not AShowHintsAndWarnings then
+      IsHint := ContainsText(Line, ': Hinweis ') or ContainsText(Line, ': hint ');
+      IsWarning := ContainsText(Line, ': warning W') and not IsHint;
+
+      if IsHint or IsWarning then
       begin
-        IsHint := ContainsText(Line, ': Hinweis ') or ContainsText(Line, ': hint ');
-        IsWarning := ContainsText(Line, ': warning W') and not IsHint;
-        if IsHint or IsWarning then
+        // Drop entirely unless the caller asked to see hints/warnings; when shown,
+        // still cap their number so a noisy project can't flood the result.
+        if not AShowHintsAndWarnings then
           Continue;
+        if (AMaxHintsWarnings > 0) and (HWShown >= AMaxHintsWarnings) then
+        begin
+          Inc(HWDropped);
+          Continue;
+        end;
+        Inc(HWShown);
+        FilteredLines.Add(Line);
+        Continue;
+      end;
+
+      // On a failed build, cap the number of error lines. Undetected errors fall
+      // through to the "kept as-is" path below, so nothing is ever hidden — only
+      // detected errors beyond the cap are collapsed into a count.
+      if (not ASuccess) and IsErrorLine(Line) then
+      begin
+        if (AMaxErrors > 0) and (ErrorsShown >= AMaxErrors) then
+        begin
+          Inc(ErrorsDropped);
+          Continue;
+        end;
+        Inc(ErrorsShown);
+        FilteredLines.Add(Line);
+        Continue;
       end;
 
       FilteredLines.Add(Line);
     end;
+
+    if ErrorsDropped > 0 then
+      FilteredLines.Add(Format('... (+%d more error(s); set maxerrors=0 to show all) ...',
+        [ErrorsDropped]));
+    if HWDropped > 0 then
+      FilteredLines.Add(Format('... (+%d more hint(s)/warning(s) suppressed) ...',
+        [HWDropped]));
 
     Result := TrimRight(FilteredLines.Text);
   finally
     Lines.Free;
     FilteredLines.Free;
   end;
+
+  // Final hard ceiling on total volume, regardless of how the lines were classified.
+  Result := CapTotalLines(Result, AMaxOutputLines);
+end;
+
+function TMSBuildTool.WrapWithRsvars(const APlatform, AMSBuildArgs: string): string;
+begin
+  // Win32: bin\rsvars.bat, Win64: bin64\rsvars64.bat
+  if SameText(APlatform, 'Win64') then
+    Result := Format('cmd.exe /c "call "%s\bin64\rsvars64.bat" && %s"',
+      [FBDSPath, AMSBuildArgs])
+  else
+    Result := Format('cmd.exe /c "call "%s\bin\rsvars.bat" && %s"',
+      [FBDSPath, AMSBuildArgs]);
+end;
+
+function TMSBuildTool.ResolveExeOutputDir(const AProjectFile, AProjectDir,
+  APlatform, AConfig: string): string;
+const
+  Marker = '__EXEOUTPUT__=';
+var
+  WrapperPath: string;
+  WrapperXml: string;
+  MSBuildArgs: string;
+  Output: string;
+  ExitCode: DWORD;
+  Lines: TStringList;
+  Line: string;
+  Value: string;
+  P: Integer;
+begin
+  Result := '';
+
+  // dcc emits <Project>.gv next to the output executable, whose directory is the
+  // project's resolved DCC_ExeOutput. That value may be absolute (e.g. L:\) and
+  // therefore outside the project tree, so we ask MSBuild to evaluate it for us
+  // via a throwaway wrapper project that imports the real .dproj.
+  WrapperPath := TPath.Combine(TPath.GetTempPath,
+    'dbuildmcp_exeout_' + TPath.GetGUIDFileName(False) + '.proj');
+
+  WrapperXml :=
+    '<?xml version="1.0" encoding="utf-8"?>'#13#10 +
+    '<Project DefaultTargets="__GetExeOutput" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">'#13#10 +
+    '  <Import Project="' + AProjectFile + '"/>'#13#10 +
+    '  <Target Name="__GetExeOutput">'#13#10 +
+    '    <Message Importance="high" Text="' + Marker + '$(DCC_ExeOutput)"/>'#13#10 +
+    '  </Target>'#13#10 +
+    '</Project>'#13#10;
+
+  try
+    TFile.WriteAllText(WrapperPath, WrapperXml, TEncoding.UTF8);
+    try
+      MSBuildArgs := Format(
+        'msbuild -nologo "%s" /t:__GetExeOutput /p:Platform=%s /p:Config=%s -verbosity:minimal',
+        [WrapperPath, APlatform, AConfig]);
+
+      if not ExecuteProcess(WrapWithRsvars(APlatform, MSBuildArgs), AProjectDir, Output, ExitCode) then
+        Exit;
+      if ExitCode <> 0 then
+        Exit;
+
+      Lines := TStringList.Create;
+      try
+        Lines.Text := Output;
+        for Line in Lines do
+        begin
+          P := Pos(Marker, Line);
+          if P > 0 then
+          begin
+            Value := Trim(Copy(Line, P + Length(Marker), MaxInt));
+            Break;
+          end;
+        end;
+      finally
+        Lines.Free;
+      end;
+    finally
+      TFile.Delete(WrapperPath);
+    end;
+  except
+    // Any failure here just means we fall back to the relative-path candidates.
+    Exit('');
+  end;
+
+  if Value = '' then
+    Exit('');
+
+  Value := StringReplace(Value, '/', '\', [rfReplaceAll]);
+  if not TPath.IsPathRooted(Value) then
+    Value := TPath.Combine(AProjectDir, Value);
+  Result := TPath.GetFullPath(Value);
 end;
 
 function TMSBuildTool.BuildGraphvizArg(const Params: TMSBuildParams): string;
@@ -336,8 +546,8 @@ begin
   Result := Format(' /p:DCC_AdditionalSwitches="%s"', [Switches]);
 end;
 
-function TMSBuildTool.FindGraphvizFile(const AProjectDir, AGvName, APlatform,
-  AConfig: string; ABuildStart: TDateTime): string;
+function TMSBuildTool.FindGraphvizFile(const AProjectDir, AExeOutDir, AGvName,
+  APlatform, AConfig: string; ABuildStart: TDateTime): string;
 
   procedure Consider(const APath: string; var ABest: string; var ABestTime: TDateTime);
   var
@@ -362,8 +572,12 @@ begin
   Best := '';
   BestTime := 0;
 
-  // dcc writes <ProjectName>.gv next to the output executable. Check the default
-  // exe-output layout (<Platform>\<Config>) and the project directory first.
+  // dcc writes <ProjectName>.gv next to the output executable. Prefer the
+  // MSBuild-resolved exe-output directory (handles absolute DCC_ExeOutput such
+  // as L:\), then fall back to the default <Platform>\<Config> layout and the
+  // project directory.
+  if AExeOutDir <> '' then
+    Consider(TPath.Combine(AExeOutDir, AGvName), Best, BestTime);
   Consider(TPath.Combine(TPath.Combine(TPath.Combine(AProjectDir, APlatform), AConfig), AGvName), Best, BestTime);
   Consider(TPath.Combine(AProjectDir, AGvName), Best, BestTime);
   Consider(TPath.Combine(TPath.Combine(AProjectDir, APlatform), AGvName), Best, BestTime);
@@ -391,9 +605,11 @@ var
   SourceDir: string;
   OutDir: string;
   GvDest: string;
+  ExeOutDir: string;
 begin
   GvName := ChangeFileExt(ExtractFileName(AProjectFile), '.gv');
-  GvSource := FindGraphvizFile(AProjectDir, GvName, APlatform, AConfig, ABuildStart);
+  ExeOutDir := ResolveExeOutputDir(AProjectFile, AProjectDir, APlatform, AConfig);
+  GvSource := FindGraphvizFile(AProjectDir, ExeOutDir, GvName, APlatform, AConfig, ABuildStart);
 
   if GvSource = '' then
   begin
@@ -442,6 +658,7 @@ var
   ProjectFile: string;
   BuildType, Platform, Config, Verbosity: string;
   ShowHintsAndWarnings: Boolean;
+  MaxErrors: Integer;
   ExitCode: DWORD;
   Output: string;
   Success: Boolean;
@@ -477,6 +694,11 @@ begin
   else
     ShowHintsAndWarnings := FDefaultShowHintsAndWarnings;
 
+  if Params.MaxErrorsProvided then
+    MaxErrors := Params.MaxErrors
+  else
+    MaxErrors := FDefaultMaxErrors;
+
   // Validate project file
   if not TFile.Exists(ProjectFile) then
   begin
@@ -493,16 +715,9 @@ begin
   // treats them as additional /p: property separators.
   GraphvizArg := BuildGraphvizArg(Params);
 
-  // Use appropriate rsvars script based on platform
-  // Win32: bin\rsvars.bat, Win64: bin64\rsvars64.bat
   MSBuildCmd := Format('msbuild -nologo "%s" /t:%s /p:Platform=%s /p:Config=%s -verbosity:%s%s',
     [ProjectFile, BuildType, Platform, Config, Verbosity, GraphvizArg]);
-  if SameText(Platform, 'Win64') then
-    CommandLine := Format('cmd.exe /c "call "%s\bin64\rsvars64.bat" && %s"',
-      [FBDSPath, MSBuildCmd])
-  else
-    CommandLine := Format('cmd.exe /c "call "%s\bin\rsvars.bat" && %s"',
-      [FBDSPath, MSBuildCmd]);
+  CommandLine := WrapWithRsvars(Platform, MSBuildCmd);
 
   // Record the start time (minus a small tolerance) so we can tell a freshly
   // emitted .gv from a leftover of an earlier build.
@@ -513,7 +728,7 @@ begin
   begin
     Success := (ExitCode = 0);
     Output := FilterOutput(Output, ProjectFile, ShowHintsAndWarnings, Success,
-      SameText(Verbosity, 'quiet'));
+      SameText(Verbosity, 'quiet'), MaxErrors, FDefaultMaxHintsWarnings, FMaxOutputLines);
 
     // Collect / report the GraphViz .gv file dcc emits next to the project.
     if Params.Graphviz then
@@ -522,20 +737,17 @@ begin
     else
       GraphvizInfo := '';
 
-    Result := Format(
-      'BUILD %s'#13#10 +
-      '==============='#13#10 +
-      'Project: %s'#13#10 +
-      'BuildType: %s'#13#10 +
-      'Platform: %s'#13#10 +
-      'Config: %s'#13#10 +
-      'ExitCode: %d',
+    // One-line header to keep the common (repeated) result small. The full project
+    // path is omitted - the caller supplied it and the filename disambiguates.
+    // ASCII '|' separator on purpose: it is a single byte (cheaper than a multi-byte
+    // dash) and sidesteps any source/transport encoding pitfalls.
+    Result := Format('BUILD %s | %s | %s/%s/%s (exit %d)',
       [IfThen(Success, 'SUCCEEDED', 'FAILED'),
-       ProjectFile, BuildType, Platform, Config, ExitCode]);
+       ExtractFileName(ProjectFile), Platform, Config, BuildType, ExitCode]);
     if GraphvizInfo <> '' then
       Result := Result + #13#10 + 'GraphViz: ' + GraphvizInfo;
     if Output <> '' then
-      Result := Result + #13#10 + '===============' + #13#10 + Output;
+      Result := Result + #13#10 + Output;
   end
   else
     Result := 'ERROR: ' + Output;

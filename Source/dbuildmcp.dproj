@@ -100,6 +100,7 @@ $(PostBuildEvent)]]></PostBuildEvent>
         <DelphiCompile Include="$(MainSource)">
             <MainSource>MainSource</MainSource>
         </DelphiCompile>
+        <DCCReference Include="dbuildmcp.ConsoleLog.pas"/>
         <DCCReference Include="dbuildmcp.Tool.MSBuild.pas"/>
         <BuildConfiguration Include="Base">
             <Key>Base</Key>

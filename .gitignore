@@ -51,12 +51,17 @@
 *.hpp
 *Resource.rc
 
+# Delphi build output directories
+Win32/
+Win64/
+
 # Delphi local files (user-specific info)
 *.local
 *.identcache
 *.projdata
 *.tvsconfig
 *.dsk
+*.delphilsp.json
 
 # Delphi history and backups
 __history/
